@@ -1,10 +1,14 @@
 import decky_plugin
+import glob
 import json
 import os
+import platform
 import pwd
 import re
+import shutil
 import ssl
 import subprocess
+import tempfile
 import urllib.request
 
 # Resolve deck user's home regardless of what user this process runs as
@@ -21,6 +25,7 @@ _SYSTEM_ENV = {
 _SSL_CTX = ssl.create_default_context(cafile="/etc/ssl/certs/ca-certificates.crt")
 
 INSTALLER_DIR = os.path.join(_DECK_HOME, "Android_Waydroid")
+BINDER_AUR = "https://aur.archlinux.org/binder_linux-dkms.git"
 INSTALLER_GITHUB_API = "https://api.github.com/repos/ryanrudolfoba/SteamOS-Waydroid-Installer/commits/main"
 
 _LOCAL_INSTALLER = os.path.join(_DECK_HOME, "steamos-waydroid-installer", "steamos-waydroid-installer.sh")
@@ -92,6 +97,17 @@ def _get_steamos_version() -> str:
     return "unknown"
 
 
+def _binder_loaded() -> bool:
+    try:
+        r = subprocess.run(
+            ["/usr/sbin/lsmod"],
+            capture_output=True, text=True, timeout=5, env=_SYSTEM_ENV,
+        )
+        return "binder_linux" in r.stdout
+    except Exception:
+        return False
+
+
 def _container_running() -> bool:
     try:
         r = subprocess.run(
@@ -118,6 +134,7 @@ class Plugin:
         container_running = _container_running() if waydroid_installed else False
         compatible = _is_compatible(steamos_version)
         min_v, max_v = _get_supported_range_local()
+        binder_ok = _binder_loaded()
 
         return {
             "steamos_version": steamos_version,
@@ -126,6 +143,7 @@ class Plugin:
             "compatible": compatible,
             "supported_min": f"{min_v[0]}.{min_v[1]}",
             "supported_max": f"{max_v[0]}.{max_v[1]}" if max_v else None,
+            "binder_ok": binder_ok,
         }
 
     async def check_steamos_update(self):
@@ -260,6 +278,86 @@ class Plugin:
             return {"success": True, "message": "Container stopped"}
         except Exception as e:
             return {"success": False, "message": str(e)}
+
+    async def repair_binder(self):
+        kernel = platform.uname().release
+        deck_pw = pwd.getpwnam("deck")
+        neptune_ver = kernel.split("-")[4]
+        tmpdir = None
+        try:
+            subprocess.run(
+                ["/usr/bin/steamos-readonly", "disable"],
+                capture_output=True, timeout=30, env=_SYSTEM_ENV,
+            )
+
+            r = subprocess.run(
+                ["/usr/bin/pacman", "-S", "--noconfirm", "fakeroot", "debugedit", "dkms",
+                 "plymouth", f"linux-neptune-{neptune_ver}-headers", "--overwrite", "*"],
+                capture_output=True, text=True, timeout=300, env=_SYSTEM_ENV,
+            )
+            if r.returncode != 0:
+                return {"success": False, "message": f"Failed to install build deps: {r.stderr.strip()}"}
+
+            tmpdir = tempfile.mkdtemp()
+            os.chown(tmpdir, deck_pw.pw_uid, deck_pw.pw_gid)
+            binder_dir = os.path.join(tmpdir, "binder")
+
+            r = subprocess.run(
+                ["/usr/bin/git", "clone", "--depth=1", BINDER_AUR, binder_dir],
+                capture_output=True, text=True, timeout=120, env=_SYSTEM_ENV,
+            )
+            if r.returncode != 0:
+                return {"success": False, "message": f"Failed to clone binder repo: {r.stderr.strip()}"}
+
+            for root, dirs, files in os.walk(binder_dir):
+                os.chown(root, deck_pw.pw_uid, deck_pw.pw_gid)
+                for f in files:
+                    os.chown(os.path.join(root, f), deck_pw.pw_uid, deck_pw.pw_gid)
+
+            r = subprocess.run(
+                ["/usr/bin/runuser", "-u", "deck", "--", "/usr/bin/makepkg", "-f"],
+                cwd=binder_dir, capture_output=True, text=True, timeout=300, env=_SYSTEM_ENV,
+            )
+            if r.returncode != 0:
+                return {"success": False, "message": f"makepkg failed: {r.stderr.strip()}"}
+
+            pkgs = glob.glob(os.path.join(binder_dir, "binder_linux-dkms*.zst"))
+            if not pkgs:
+                return {"success": False, "message": "Built package not found"}
+
+            r = subprocess.run(
+                ["/usr/bin/pacman", "-U", "--noconfirm"] + pkgs,
+                capture_output=True, text=True, timeout=120, env=_SYSTEM_ENV,
+            )
+            if r.returncode != 0:
+                return {"success": False, "message": f"pacman install failed: {r.stderr.strip()}"}
+
+            module_src = f"/var/lib/dkms/binder/1/{kernel}/x86_64/module/binder_linux.ko.zst"
+            module_dst = f"/usr/lib/modules/{kernel}/updates/dkms"
+            os.makedirs(module_dst, exist_ok=True)
+            shutil.copy2(module_src, module_dst)
+
+            subprocess.run(["/usr/sbin/depmod", "-a"], capture_output=True, timeout=30, env=_SYSTEM_ENV)
+
+            r = subprocess.run(
+                ["/usr/sbin/modprobe", "binder_linux", "device=binder,hwbinder,vndbinder"],
+                capture_output=True, text=True, timeout=30, env=_SYSTEM_ENV,
+            )
+            if r.returncode != 0:
+                return {"success": False, "message": f"modprobe failed: {r.stderr.strip()}"}
+
+            return {"success": True, "message": "Binder repaired successfully"}
+
+        except Exception as e:
+            decky_plugin.logger.error(f"repair_binder failed: {e}")
+            return {"success": False, "message": str(e)}
+        finally:
+            subprocess.run(
+                ["/usr/bin/steamos-readonly", "enable"],
+                capture_output=True, timeout=30, env=_SYSTEM_ENV,
+            )
+            if tmpdir and os.path.exists(tmpdir):
+                shutil.rmtree(tmpdir, ignore_errors=True)
 
     async def _main(self):
         decky_plugin.logger.info("WaydroidToolbox loaded")

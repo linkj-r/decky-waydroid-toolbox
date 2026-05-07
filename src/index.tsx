@@ -16,6 +16,7 @@ interface Status {
   compatible: boolean;
   supported_min: string;
   supported_max: string | null;
+  binder_ok: boolean;
 }
 
 interface SteamOSUpdate {
@@ -40,6 +41,7 @@ const checkSteamOSUpdate = callable<[], SteamOSUpdate>("check_steamos_update");
 const checkWaydroidUpdate = callable<[], WaydroidUpdate>("check_waydroid_update");
 const startContainer = callable<[], ActionResult>("start_container");
 const stopContainer = callable<[], ActionResult>("stop_container");
+const repairBinder = callable<[], ActionResult>("repair_binder");
 
 const GREEN = "#4caf50";
 const YELLOW = "#ff9800";
@@ -61,6 +63,7 @@ function Content() {
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [loadingUpdates, setLoadingUpdates] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [repairing, setRepairing] = useState(false);
 
   async function refreshStatus() {
     setLoadingStatus(true);
@@ -89,6 +92,18 @@ function Content() {
   function showMsg(msg: string) {
     setActionMsg(msg);
     setTimeout(() => setActionMsg(null), 5000);
+  }
+
+  async function handleRepairBinder() {
+    setRepairing(true);
+    setActionMsg("Repairing binder… this may take a few minutes.");
+    try {
+      const result = await repairBinder();
+      showMsg(result.message);
+      await refreshStatus();
+    } finally {
+      setRepairing(false);
+    }
   }
 
   async function handleStartStop() {
@@ -140,8 +155,28 @@ function Content() {
           </span>
         </PanelSectionRow>
 
+        {!status.binder_ok && (
+          <>
+            <PanelSectionRow>
+              <span style={{ color: RED, fontWeight: "bold" }}>
+                ⚠ Binder module not loaded
+              </span>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <span style={{ fontSize: "0.8em", color: GRAY }}>
+                Waydroid will not work. This usually happens after a SteamOS update.
+              </span>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ButtonItem layout="below" onClick={handleRepairBinder} disabled={repairing}>
+                {repairing ? "Repairing…" : "Repair Binder"}
+              </ButtonItem>
+            </PanelSectionRow>
+          </>
+        )}
+
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={handleStartStop}>
+          <ButtonItem layout="below" onClick={handleStartStop} disabled={repairing || !status.binder_ok}>
             {status.container_running ? "Stop Container" : "Start Container"}
           </ButtonItem>
         </PanelSectionRow>
