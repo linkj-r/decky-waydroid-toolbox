@@ -1,0 +1,10 @@
+{
+  "name": "WaydroidToolbox",
+  "author": "KJ Roberts",
+  "flags": ["root"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["waydroid", "android", "root"],
+    "description": "Waydroid status, container control, and SteamOS compatibility indicator"
+  }
+}

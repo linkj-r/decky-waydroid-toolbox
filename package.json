@@ -1,0 +1,21 @@
+{
+  "name": "decky-waydroid-toolbox",
+  "version": "0.1.0",
+  "description": "Waydroid status, container control, and SteamOS compatibility indicator for Decky Loader",
+  "type": "module",
+  "scripts": {
+    "build": "rollup -c",
+    "watch": "rollup -c -w"
+  },
+  "author": "KJ Roberts",
+  "license": "MIT",
+  "devDependencies": {
+    "@decky/api": "^1.0.0",
+    "@decky/rollup": "^1.0.0",
+    "@decky/ui": "^3.0.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "react-icons": "^4.12.0",
+    "typescript": "^5.0.0"
+  }
+}
